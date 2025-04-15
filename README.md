@@ -12,8 +12,8 @@ Plex-audit connects read-only to your Plex server's sqlite db and outputs a tabl
 
 | Project    | Historical Awareness                                                                 | Interface      | Security                                                                                                                |
 | ---------- | ------------------------------------------------------------------------------------ | -------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Plex-audit | Watch history from 2021 onward, without reguard to when you first install plex-audit | CLI only       | No running server, no api, no system-resources used when not running                                                    |
-| Tautilli   | Only knows the watch history from the moment it's installed                          | Web UI and API | Must be running to keep track of activity. Needs network access from the plex server and an network interface to access |
+| [Plex-audit](https://github.com/pnwmatt/plex-audit) | Watch history from 2021 onward, without reguard to when you first install plex-audit | CLI only       | No running server, no api, no system-resources used when not running                                                    |
+| [Tautilli](https://tautulli.com/)   | Only knows the watch history from the moment it's installed                          | Web UI and API | Must be running to keep track of activity. Needs network access from the plex server and an network interface to access |
 
 ## Project Status
 
