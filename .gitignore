@@ -1,0 +1,7 @@
+# Added by goreleaser init:
+dist/
+.DS_Store
+*.sql
+*.sqlite
+*.*-shm
+*.*-wal
