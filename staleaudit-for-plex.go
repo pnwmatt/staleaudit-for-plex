@@ -113,7 +113,7 @@ func main() {
 				loadConfig(configPath)
 			} else {
 				fmt.Println("Error: Unrecognized argument: ", arg)
-				fmt.Println("Usage: plex-audit --config=<path to config file>")
+				fmt.Println("Usage: staleaudit-for-plex --config=<path to config file>")
 				os.Exit(1)
 			}
 		}
@@ -174,7 +174,7 @@ func loadConfig(configLocationInput string) {
 	}
 
 	if configLocationInput == "" {
-		configLocation = os.ExpandEnv(plexRoot + slash + "plex-audit.json")
+		configLocation = os.ExpandEnv(plexRoot + slash + "staleaudit-for-plex.json")
 	} else {
 		configLocation = os.ExpandEnv(configLocationInput)
 		if !strings.Contains(configLocationInput, slash) {

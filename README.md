@@ -1,8 +1,8 @@
 ![banner](./demo.gif)
 
-Plex-audit is a command-line tool that helps you identify stale and large content in your Plex library using watch-data from within Plex.
+staleaudit-for-plex is a command-line tool that helps you identify stale and large content in your Plex library using watch-data from within Plex.
 
-Plex-audit connects read-only to your Plex server's sqlite db and outputs a table containing:
+staleaudit-for-plex connects read-only to your Plex server's sqlite db and outputs a table containing:
 
 - Items that are older than 18 months (by default)
 - Items that haven't been watched in 18 months (by default)
@@ -12,7 +12,7 @@ Plex-audit connects read-only to your Plex server's sqlite db and outputs a tabl
 
 | Project    | Historical Awareness                                                                 | Interface      | Security                                                                                                                |
 | ---------- | ------------------------------------------------------------------------------------ | -------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| [Plex-audit](https://github.com/pnwmatt/plex-audit) | Watch history from 2021 onward, without reguard to when you first install plex-audit | CLI only       | No running server, no api, no system-resources used when not running                                                    |
+| [staleaudit-for-plex](https://github.com/pnwmatt/staleaudit-for-plex) | Watch history from 2021 onward, without reguard to when you first install staleaudit-for-plex | CLI only       | No running server, no api, no system-resources used when not running                                                    |
 | [Tautilli](https://tautulli.com/)   | Only knows the watch history from the moment it's installed                          | Web UI and API | Must be running to keep track of activity. Needs network access from the plex server and an network interface to access |
 
 ## Project Status
@@ -26,7 +26,7 @@ Not tested on Linux or BSD
 ### ... via golang
 
 ```bash
-go install github.com/pnwmatt/plex-audit@latest
+go install github.com/pnwmatt/staleaudit-for-plex@latest
 ```
 
 ## Usage
@@ -34,7 +34,7 @@ go install github.com/pnwmatt/plex-audit@latest
 On the server running Plex, simply run the command:
 
 ```bash
-plex-audit
+staleaudit-for-plex
 ```
 
 This will create/use a default config which is stored in your Plex Media Server folder.
@@ -42,7 +42,7 @@ This will create/use a default config which is stored in your Plex Media Server 
 Alternatively you can define the location of the config file with the `--config` flag:
 
 ```bash
-plex-audit --config=/path/to/config.json
+staleaudit-for-plex --config=/path/to/config.json
 ```
 
 Use the ARROW and ENTER keys on your keyboard to choose a library, and then the ARROW keys to scroll up/down.
@@ -53,7 +53,7 @@ This tool is READ ONLY, so now that you have the information, you can delete it 
 
 ## Configuration
 
-By default when first ran, it will create a `plex-audit.json` file with your settings in the Plex Media Server's folder:
+By default when first ran, it will create a `staleaudit-for-plex.json` file with your settings in the Plex Media Server's folder:
 
 - Windows: `%LOCALAPPDATA%\Plex Media Server`
 - Mac: `~/Library/Application Support/Plex Media Server`
