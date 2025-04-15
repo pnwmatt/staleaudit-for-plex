@@ -1,4 +1,4 @@
-module pnwmatt.com/staleaudit-for-plex
+module github.com/pnwmatt/staleaudit-for-plex
 
 go 1.24.1
 
