@@ -7,4 +7,4 @@ dist/
 *.*-wal
 .vscode
 *.sh
-plex-audit
+staleaudit-for-plex
