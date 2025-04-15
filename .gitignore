@@ -5,3 +5,5 @@ dist/
 *.sqlite
 *.*-shm
 *.*-wal
+.vscode
+*.sh
