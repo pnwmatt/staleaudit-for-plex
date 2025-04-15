@@ -422,4 +422,5 @@ func (m model) View() string {
 				baseStyle.Render(m.table.View())),
 		) + "\n"
 	}
+	return "Error - unrecognized page"
 }
