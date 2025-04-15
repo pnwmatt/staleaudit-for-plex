@@ -6,13 +6,12 @@ import (
 	"log"
 	"math"
 	"os"
+	"sort"
 	"strconv"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"golang.org/x/text/message"
-
-	"github.com/fatih/color"
 
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
@@ -26,15 +25,23 @@ var baseStyle = lipgloss.NewStyle().
 
 type LibraryItem struct {
 	Title         string
-	TotalSize     int
+	TotalSize     int64
 	GUID          string
-	CreatedAt     int64
+	CreatedAt     float64
 	MetadataID    int
 	ElderGUID     string
 	NumberStreams int
-	LastWatched   int64
+	LastWatched   float64
+}
 
-	
+type LibraryItemSeason struct {
+	Title         string
+	TotalSize     int64
+	MetadataID int
+	ParentID int
+	NumberChildren int
+	CreatedAt float64
+	LastWatched float64
 }
 
 type Page int64
@@ -83,7 +90,49 @@ func main() {
 	m.printer = message.NewPrinter(message.MatchLanguage("en"))
 
 
-	tableColumns, tableRows := m.getLibrariesAndSizes()
+	
+
+	
+	m.prepareLibraryPickerPage()
+	if _, err := tea.NewProgram(m).Run(); err != nil {
+		fmt.Println("Error running program:", err)
+		os.Exit(1)
+	}
+	
+}
+
+func (m *model) prepareLibraryPickerPage() {
+	tableRows := []table.Row{}
+
+	rows, err := m.db.Query("SELECT library_section_id, name, sum(size) as s FROM media_items INNER JOIN library_sections ls ON ls.id = library_section_id WHERE deleted_at IS NULL AND library_section_id > 0 GROUP BY library_section_id ORDER BY s DESC")
+	if err != nil {
+		log.Fatal("Media Items query:" + err.Error())
+	}
+	defer rows.Close()
+	// Iterate through the rows
+	for rows.Next() {
+		var library_section_id int
+		var name string
+		var size float64
+		err := rows.Scan(&library_section_id, &name, &size)
+		if err != nil {
+			log.Fatal(err)
+		}
+		sizeInGb := m.printer.Sprintf("%.2f", size / 1000.00 / 1000.00 / 1000.00)
+		m.maxLibraryNameLength = math.Max(m.maxLibraryNameLength, float64(len(name)))
+		tableRows = append(tableRows, table.Row{
+			fmt.Sprintf("%d", library_section_id),
+			name,
+			sizeInGb,
+		})
+	}
+
+	tableColumns := []table.Column{
+		{Title: "ID", Width: 4},
+		{Title: "Library Name", Width: int(math.Max(15, math.Min(36,m.maxLibraryNameLength)))},
+		{Title: "Size in Gb", Width: 15},
+	}
+
 
 	t := table.New(
 		table.WithColumns(tableColumns),
@@ -106,17 +155,10 @@ func main() {
 
 	m.table = t
 	
+}
 
-	if _, err := tea.NewProgram(m).Run(); err != nil {
-		fmt.Println("Error running program:", err)
-		os.Exit(1)
-	}
-	
-	libraryChoice := 0
-	fmt.Print("Enter the library section id: ")
-	fmt.Scanf("%d", &libraryChoice)
+func (m *model) prepareLibraryViewPage() {
 
-	color.Cyan("# Unwatched Content")
 	//  select size from media_items inner join metadata_items mi on media_items.metadata_item_id = mi.id where size > 0;
 	// media_items has size, and binds to metadata_item_id.
 	// Once it's to metadata_items, we can remove items that exist in metadata_item_views
@@ -126,9 +168,8 @@ func main() {
 
 	// SO:
 	// Populate a list of all the top-level items in the library:
-
-	query := "SELECT guid, id, title, created_at FROM metadata_items where parent_id is null and library_section_id = ?;"
-	rows, err := db.Query(query, libraryChoice)
+	query := "SELECT guid, metadata_items.id, title, metadata_items.created_at, coalesce(size,0) FROM metadata_items LEFT JOIN media_items on media_items.metadata_item_id = metadata_items.id WHERE metadata_items.guid not like 'collection://%' AND parent_id is null and metadata_items.library_section_id = ?;"
+	rows, err := m.db.Query(query, m.libraryID)
 	if err != nil {
 		log.Fatal("MetadataItems query: " + err.Error())
 	}
@@ -136,37 +177,75 @@ func main() {
 	// Iterate through the rows
 
 	libraryItems := make(map[string]LibraryItem)
+	idToGuidMap := make(map[int]string)
+	duplicateGuids := make(map[string]int)
 	for rows.Next() {
 		var id int
 		var title string
 		var guid string
-		var createdAt int64
-		err := rows.Scan(&guid, &id, &title, &createdAt)
+		var createdAt float64
+		var size int64
+		err := rows.Scan(&guid, &id, &title, &createdAt, &size)
 		if err != nil {
 			log.Fatal(err)
 		}
 		if libraryItems[guid].MetadataID != 0 {
-			log.Fatal("Duplicate ID found in library items")
+			duplicateGuids[guid]++
+			item := libraryItems[guid]
+			item.TotalSize += size
+			item.CreatedAt = math.Min(item.CreatedAt, createdAt)
+		} else {
+			libraryItems[guid] = LibraryItem{Title: title, TotalSize: size, MetadataID: id, NumberStreams: 0, LastWatched: 0, CreatedAt: createdAt}
 		}
-		libraryItems[guid] = LibraryItem{Title: title, TotalSize: 0, MetadataID: id, NumberStreams: 0, LastWatched: 0, CreatedAt: createdAt}
+
+		idToGuidMap[id] = guid
 	}
 
-	query = "SELECT grandparent_guid, miv.guid, miv.viewed_at FROM metadata_item_views as miv INNER JOIN metadata_items mi ON mi.guid = miv.guid WHERE grandparent_guid is not null and mi.library_section_id = ? and miv.viewed_at > 0 ORDER BY miv.viewed_at ASC;"
-	rows, err = db.Query(query, libraryChoice)
+	// for children, we need to sum the media and update the parent
+	// start by getting all the seasons
+	allSeasons := make(map[int]LibraryItemSeason)
+	query = "select season.parent_id, season.id, season.title, sum(size) as size, count(1) as count FROM media_items INNER JOIN metadata_items episode ON  media_items.metadata_item_id = episode.id INNER JOIN metadata_items season ON season.id = episode.parent_id WHERE episode.library_section_id = ? GROUP BY season.id;"
+	rows, err = m.db.Query(query, m.libraryID)
 	if err != nil {
 		log.Fatal("Views Query: " + err.Error())
 	}
 	defer rows.Close()
 	// Iterate through the rows
 
-	var oldestView int64
-	var newestView int64
+	for rows.Next() {
+		var parentID int
+		var seasonID int
+		var title string
+		var size int64
+		var count int
+		err := rows.Scan(&parentID, &seasonID, &title, &size, &count)
+		if err != nil {
+			log.Fatal("Children size counting: " + err.Error())
+		}
+		l := libraryItems[idToGuidMap[parentID]]
+		l.TotalSize += size
+		libraryItems[idToGuidMap[parentID]] = l
+	}
+
+	// add view information
+	query = "SELECT grandparent_guid, coalesce(size, 0), miv.guid, coalesce(parent_id, 0), miv.viewed_at FROM metadata_item_views as miv INNER JOIN metadata_items mi ON mi.guid = miv.guid LEFT JOIN media_items on media_items.metadata_item_id = mi.id WHERE grandparent_guid is not null and mi.library_section_id = ? and miv.viewed_at > 0 ORDER BY miv.viewed_at ASC;"
+	rows, err = m.db.Query(query, m.libraryID)
+	if err != nil {
+		log.Fatal("Views Query: " + err.Error())
+	}
+	defer rows.Close()
+	// Iterate through the rows
+
+	var oldestView float64
+	var newestView float64
 	for rows.Next() {
 
 		var guid string
+		var parentID int
+		var size int64
 		var grandparentGuid string
-		var viewedAt int64
-		err := rows.Scan(&grandparentGuid, &guid, &viewedAt)
+		var viewedAt float64
+		err := rows.Scan(&grandparentGuid, &size, &guid, &parentID, &viewedAt)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -180,23 +259,43 @@ func main() {
 			guid = grandparentGuid
 		}
 
+		if parentID > 0 {
+			// this is an episode in a season
+			s := allSeasons[parentID]
+			s.NumberChildren++
+			s.TotalSize += size
+		}
+
 		item := libraryItems[guid]
 		//fmt.Println("Upading item", item.Title, item.GUID, item.NumberStreams, viewedAt)
 		item.NumberStreams++
-		item.LastWatched = viewedAt
+		item.LastWatched = math.Max(viewedAt, item.LastWatched)
+		item.TotalSize += size
 		libraryItems[guid] = item
 	}
 
+
+
+	// filter by created and last watched to get the decaying rows
+	decayingRows := make([]table.Row, 0)
+
 	// make a unix epoch timestamp for 18 months prior:
 	// 18 months = 18 * 30 * 24 * 60 * 60 = 15552000
-	outdated := time.Now().AddDate(0, -18, 0).Unix()
+	outdated := float64(time.Now().AddDate(0, -18, 0).Unix())
 	for _, item := range libraryItems {
 		if item.CreatedAt > outdated {
 			continue
 		}
 
 		if item.LastWatched < outdated {
-			color.Red("%s %d", item.Title, item.NumberStreams)
+			
+			decayingRows = append(decayingRows, table.Row{
+				fmt.Sprintf("%d", item.MetadataID),
+				item.Title,
+				m.printer.Sprintf("%.2f", float64(item.TotalSize) / 1000.00 / 1000.00 / 1000.00),
+				time.Unix(int64(item.CreatedAt), 0).Format("2006-01-02"),
+				time.Unix(int64(item.LastWatched), 0).Format("2006-01-02"),
+			})
 		} else {
 			//color.Green("%s %d", item.Title, item.NumberStreams)
 		}
@@ -204,51 +303,56 @@ func main() {
 
 	// format oldestView from a unixepoch timestamp to a date
 
-	oldestViewStr := time.Unix(oldestView, 0).Format("2006-01-02")
-	newestViewStr := time.Unix(newestView, 0).Format("2006-01-02")
-	fmt.Println()
-	color.Cyan("Oldest View: %s", oldestViewStr)
-	color.Cyan("Newest View: %s", newestViewStr)
+	oldestViewStr := time.Unix(int64(oldestView), 0).Format("2006-01-02")
+	newestViewStr := time.Unix(int64(newestView), 0).Format("2006-01-02")
 
-}
-
-func (m model) getLibrariesAndSizes() ([]table.Column, []table.Row) {
-	tableRows := []table.Row{}
-
-	rows, err := m.db.Query("SELECT library_section_id, name, sum(size) as s FROM media_items INNER JOIN library_sections ls ON ls.id = library_section_id WHERE deleted_at IS NULL AND library_section_id > 0 GROUP BY library_section_id ORDER BY s DESC")
-	if err != nil {
-		log.Fatal("Media Items query:" + err.Error())
-	}
-	defer rows.Close()
-	// Iterate through the rows
-	for rows.Next() {
-		var library_section_id int
-		var name string
-		var size float64
-		err := rows.Scan(&library_section_id, &name, &size)
-		if err != nil {
-			log.Fatal(err)
-		}
-		sizeInGb := m.printer.Sprintf("%.2f", size / 1024.00 / 1024.00 / 1024.00)
-		m.maxLibraryNameLength = math.Max(m.maxLibraryNameLength, float64(len(name)))
-		tableRows = append(tableRows, table.Row{
-			fmt.Sprintf("%d", library_section_id),
-			name,
-			sizeInGb,
-		})
-	}
+	_, _ = oldestViewStr, newestViewStr
+	//fmt.Println()
 
 	tableColumns := []table.Column{
-		{Title: "ID", Width: 4},
-		{Title: "Library Name", Width: int(math.Max(15, math.Min(36,m.maxLibraryNameLength)))},
-		{Title: "Size in GB", Width: 15},
+		{Title: "ID", Width: 10},
+		{Title: "Name", Width: int(math.Max(25, math.Min(50,m.maxLibraryNameLength)))},
+		{Title: "Size in Gb", Width: 15},
+		{Title: "Created", Width: 12},
+		{Title: "Last Watched", Width: 12},
 	}
 
-	return tableColumns, tableRows
+	// sort decayingRows by size descending
+	sort.Slice(decayingRows, func(i, j int) bool {
+		sizeI, _ := strconv.ParseFloat(decayingRows[i][2], 64)
+		sizeJ, _ := strconv.ParseFloat(decayingRows[j][2], 64)
+		return sizeI > sizeJ
+	})
+
+
+	decayingTable := table.New(
+		table.WithColumns(tableColumns),
+		table.WithRows(decayingRows),
+		table.WithFocused(true),
+		table.WithHeight(int(math.Max(10,math.Min(20, float64((len(decayingRows))))))), // min 10 or (max (30 or number of rows))
+	)
+
+	s := table.DefaultStyles()
+	s.Header = s.Header.
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("240")).
+		BorderBottom(true).
+		Bold(false)
+	s.Selected = s.Selected.
+		Foreground(lipgloss.Color("229")).
+		Background(lipgloss.Color("57")).
+		Bold(false)
+	decayingTable.SetStyles(s)
+
+	m.table = decayingTable
 }
 
+// host, session, token, and Client-Identifier redacted
+// curl 'https://x.plex.direct:32400/playlists/88/items?Item%5Btype%5D=42&Item%5Btitle%5D=Jojo%20Rabbit&Item%5Btarget%5D=Custom%3A%20Universal%20TV&Item%5BtargetTagID%5D=&Item%5BlocationID%5D=-1&Item%5BLocation%5D%5Buri%5D=library%3A%2F%2Fd7a0632c-2227-401b-bea8-f19adeb9c1f9%2Fitem%2F%252Flibrary%252Fmetadata%252F8121&Item%5BDevice%5D%5Bprofile%5D=Universal%20TV&Item%5BPolicy%5D%5Bscope%5D=all&Item%5BPolicy%5D%5Bvalue%5D=&Item%5BPolicy%5D%5Bunwatched%5D=0&Item%5BMediaSettings%5D%5BvideoQuality%5D=60&Item%5BMediaSettings%5D%5BvideoResolution%5D=1920x1080&Item%5BMediaSettings%5D%5BmaxVideoBitrate%5D=8000&Item%5BMediaSettings%5D%5BaudioBoost%5D=&Item%5BMediaSettings%5D%5BsubtitleSize%5D=&Item%5BMediaSettings%5D%5BmusicBitrate%5D=&Item%5BMediaSettings%5D%5BphotoQuality%5D=&Item%5BMediaSettings%5D%5BphotoResolution%5D=&X-Plex-Product=Plex%20Web&X-Plex-Version=4.145.1&X-Plex-Client-Identifier=x&X-Plex-Platform=Firefox&X-Plex-Platform-Version=137.0&X-Plex-Features=external-media%2Cindirect-media%2Chub-style-list&X-Plex-Model=standalone&X-Plex-Device=OSX&X-Plex-Device-Name=Firefox&X-Plex-Device-Screen-Resolution=1388x763%2C1440x900&X-Plex-Token=&X-Plex-Language=en&X-Plex-Session-Id=' --compressed -X PUT -H 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:137.0) Gecko/20100101 Firefox/137.0' -H 'Accept: text/plain, */*; q=0.01' -H 'Accept-Language: en' -H 'Accept-Encoding: gzip, deflate, br, zstd' -H 'Origin: https://app.plex.tv' -H 'Sec-GPC: 1' -H 'Connection: keep-alive' -H 'Referer: https://app.plex.tv/' -H 'Sec-Fetch-Dest: empty' -H 'Sec-Fetch-Mode: cors' -H 'Sec-Fetch-Site: cross-site' -H 'DNT: 1' -H 'Priority: u=0' -H 'Pragma: no-cache' -H 'Cache-Control: no-cache' -H 'Content-Length: 0'
 
-func (m model) Init() tea.Cmd { return nil }
+
+func (m model) Init() tea.Cmd { 
+	return nil }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
@@ -266,10 +370,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			if m.page == LibraryPicker {
 				m.libraryID, _ = strconv.Atoi(m.table.SelectedRow()[0])
+				m.prepareLibraryViewPage()
 				m.page++
 			}
 			return m, tea.Batch(
-				tea.Printf("Let's go to %s!", m.table.SelectedRow()[1]),
 			)
 		}
 	}
@@ -278,5 +382,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) View() string {
-	return baseStyle.Render(m.table.View()) + "\n"
+	//fmt.Println("M.page is ", m.page)
+	switch m.page {
+	case LibraryPicker:
+		return baseStyle.Render(m.table.View()) + "\n"
+	case LibraryView:
+		
+		return baseStyle.Render(m.table.View()) + "\n"
+	}
+	return "Great."
+	
 }
