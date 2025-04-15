@@ -18,9 +18,30 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-var baseStyle = lipgloss.NewStyle().
-	BorderStyle(lipgloss.NormalBorder()).
-	BorderForeground(lipgloss.Color("240"))
+var (
+	baseStyle = lipgloss.NewStyle().
+			BorderStyle(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color("240"))
+
+	listStyle = lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color("240")).
+			Padding(1, 2).
+			Width(20)
+
+	selectedItemStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("229")).
+				Background(lipgloss.Color("57"))
+
+	itemStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("245"))
+
+	actions = []string{
+		"Open",
+		"Rename",
+		"Delete",
+	}
+)
 
 type LibraryItem struct {
 	Title         string
@@ -53,9 +74,14 @@ const (
 	LibraryView
 )
 
+type Config struct {
+	FilterCreatedBeforeMonths int
+	FilterLastStreamedMonths  int
+}
+
 type model struct {
+	config   Config
 	page     Page
-	cursor   int // which to-do list item our cursor is pointing at
 	selected int // which to-do items are selected
 	err      error
 	table    table.Model
@@ -67,7 +93,12 @@ type model struct {
 }
 
 func main() {
-	m := model{table: table.Model{}, cursor: 0, selected: 0, err: nil}
+
+	m := model{table: table.Model{}, selected: 0, err: nil}
+	m.config = Config{
+		FilterCreatedBeforeMonths: 18,
+		FilterLastStreamedMonths:  18,
+	}
 
 	// this query seems to work, but returns less rows than expected
 	// seems to stop in 2022
@@ -224,6 +255,7 @@ func (m *model) prepareLibraryViewPage() {
 		l := libraryItems[idToGuidMap[parentID]]
 		l.TotalSize += size
 		l.Seasons = append(l.Seasons, allSeasons[seasonID])
+		l.Bitrate = avgBitrate
 		libraryItems[idToGuidMap[parentID]] = l
 	}
 
@@ -271,21 +303,26 @@ func (m *model) prepareLibraryViewPage() {
 
 	// make a unix epoch timestamp for 18 months prior:
 	// 18 months = 18 * 30 * 24 * 60 * 60 = 15552000
-	outdated := float64(time.Now().AddDate(0, -18, 0).Unix())
+	createdLongAgo := float64(time.Now().AddDate(0, -1*m.config.FilterCreatedBeforeMonths, 0).Unix())
+	lastStreamedLongAgo := float64(time.Now().AddDate(0, -1*m.config.FilterLastStreamedMonths, 0).Unix())
 	for _, item := range libraryItems {
-		if item.CreatedAt > outdated {
+		if item.CreatedAt > createdLongAgo {
 			continue
 		}
 
-		if item.LastWatched < outdated {
+		if item.LastWatched < lastStreamedLongAgo {
+			lastWatchedStr := "never"
+			if item.LastWatched > 1000000 {
+				lastWatchedStr = time.Unix(int64(item.LastWatched), 0).Format("2006-01-02")
+			}
 
 			decayingRows = append(decayingRows, table.Row{
 				fmt.Sprintf("%d", item.MetadataID),
 				item.Title,
 				m.printer.Sprintf("%.2f", float64(item.TotalSize)/1000.00/1000.00/1000.00),
-				m.printer.Sprintf("%.1f", item.Bitrate / 1000.0 / 1000.0),
+				m.printer.Sprintf("%.1f", item.Bitrate/1000.0/1000.0),
 				time.Unix(int64(item.CreatedAt), 0).Format("2006-01-02"),
-				time.Unix(int64(item.LastWatched), 0).Format("2006-01-02"),
+				lastWatchedStr,
 			})
 		} else {
 			//color.Green("%s %d", item.Title, item.NumberStreams)
@@ -306,7 +343,7 @@ func (m *model) prepareLibraryViewPage() {
 		{Title: "Size (Gb)", Width: 15},
 		{Title: "Bitrate (Mb/s)", Width: 15},
 		{Title: "Created", Width: 12},
-		{Title: "Last Watched", Width: 12},
+		{Title: "Last Streamed", Width: 15},
 	}
 
 	// sort decayingRows by size descending
@@ -338,6 +375,7 @@ func (m *model) prepareLibraryViewPage() {
 	m.table = decayingTable
 }
 
+// how to: api call for optimize media.
 // host, session, token, and Client-Identifier redacted
 // curl 'https://x.plex.direct:32400/playlists/88/items?Item%5Btype%5D=42&Item%5Btitle%5D=Jojo%20Rabbit&Item%5Btarget%5D=Custom%3A%20Universal%20TV&Item%5BtargetTagID%5D=&Item%5BlocationID%5D=-1&Item%5BLocation%5D%5Buri%5D=library%3A%2F%2Fd7a0632c-2227-401b-bea8-f19adeb9c1f9%2Fitem%2F%252Flibrary%252Fmetadata%252F8121&Item%5BDevice%5D%5Bprofile%5D=Universal%20TV&Item%5BPolicy%5D%5Bscope%5D=all&Item%5BPolicy%5D%5Bvalue%5D=&Item%5BPolicy%5D%5Bunwatched%5D=0&Item%5BMediaSettings%5D%5BvideoQuality%5D=60&Item%5BMediaSettings%5D%5BvideoResolution%5D=1920x1080&Item%5BMediaSettings%5D%5BmaxVideoBitrate%5D=8000&Item%5BMediaSettings%5D%5BaudioBoost%5D=&Item%5BMediaSettings%5D%5BsubtitleSize%5D=&Item%5BMediaSettings%5D%5BmusicBitrate%5D=&Item%5BMediaSettings%5D%5BphotoQuality%5D=&Item%5BMediaSettings%5D%5BphotoResolution%5D=&X-Plex-Product=Plex%20Web&X-Plex-Version=4.145.1&X-Plex-Client-Identifier=x&X-Plex-Platform=Firefox&X-Plex-Platform-Version=137.0&X-Plex-Features=external-media%2Cindirect-media%2Chub-style-list&X-Plex-Model=standalone&X-Plex-Device=OSX&X-Plex-Device-Name=Firefox&X-Plex-Device-Screen-Resolution=1388x763%2C1440x900&X-Plex-Token=&X-Plex-Language=en&X-Plex-Session-Id=' --compressed -X PUT -H 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:137.0) Gecko/20100101 Firefox/137.0' -H 'Accept: text/plain, */*; q=0.01' -H 'Accept-Language: en' -H 'Accept-Encoding: gzip, deflate, br, zstd' -H 'Origin: https://app.plex.tv' -H 'Sec-GPC: 1' -H 'Connection: keep-alive' -H 'Referer: https://app.plex.tv/' -H 'Sec-Fetch-Dest: empty' -H 'Sec-Fetch-Mode: cors' -H 'Sec-Fetch-Site: cross-site' -H 'DNT: 1' -H 'Priority: u=0' -H 'Pragma: no-cache' -H 'Cache-Control: no-cache' -H 'Content-Length: 0'
 
@@ -377,9 +415,11 @@ func (m model) View() string {
 	case LibraryPicker:
 		return baseStyle.Render(m.table.View()) + "\n"
 	case LibraryView:
-
-		return baseStyle.Render(m.table.View()) + "\n"
+		return lipgloss.JoinHorizontal(
+			lipgloss.Top,
+			lipgloss.JoinVertical(lipgloss.Top,
+				"Displaying items added more than "+strconv.Itoa(m.config.FilterCreatedBeforeMonths)+" months ago, and not streamed in the last "+strconv.Itoa(m.config.FilterLastStreamedMonths)+" months.\n",
+				baseStyle.Render(m.table.View())),
+		) + "\n"
 	}
-	return "Great."
-
 }
