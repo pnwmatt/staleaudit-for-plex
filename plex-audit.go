@@ -99,8 +99,10 @@ type Model struct {
 }
 
 var CONFIG LocalConfig
+var VERBOSE bool
 
 func main() {
+	VERBOSE = false
 	// if there is a command line argument for --config=, pass that into loadConfig:
 	CONFIG = LocalConfig{}
 	if len(os.Args) > 1 {
@@ -156,7 +158,9 @@ func loadConfig(configLocationInput string) {
 	slash := string(os.PathSeparator)
 	var configFh *os.File
 	opsys := runtime.GOOS
-	fmt.Println("OS: " + opsys)
+	if VERBOSE {
+		fmt.Println("OS: " + opsys)
+	}
 	if strings.HasPrefix("windows/", opsys) {
 		plexRoot = "%LOCALAPPDATA%\\Plex Media Server"
 	} else if strings.HasPrefix("darwin/", opsys) {
@@ -191,7 +195,9 @@ func loadConfig(configLocationInput string) {
 		}
 		defer configFh.Close()
 	} else {
-		fmt.Println("Using an existing config...")
+		if VERBOSE {
+			fmt.Println("Using an existing config...")
+		}
 		// Load the existing file.
 		configFh, err = os.Open(configLocation)
 		if err != nil {
@@ -219,9 +225,11 @@ func loadConfig(configLocationInput string) {
 	encoder := json.NewEncoder(configFh)
 	encoder.Encode(&CONFIG)
 
-	fmt.Println("Using config at " + configLocation)
-	fmt.Println("Using Plex DB at " + CONFIG.PlexDBPath)
-	fmt.Println("Using language " + CONFIG.Language)
+	if VERBOSE {
+		fmt.Println("Using config at " + configLocation)
+		fmt.Println("Using Plex DB at " + CONFIG.PlexDBPath)
+		fmt.Println("Using language " + CONFIG.Language)
+	}
 }
 
 func (m *Model) prepareLibraryPickerPage() {
@@ -431,7 +439,6 @@ func (m *Model) prepareLibraryViewPage() {
 	newestViewStr := time.Unix(int64(newestView), 0).Format("2006-01-02")
 
 	_, _ = oldestViewStr, newestViewStr
-	//fmt.Println()
 
 	tableColumns := []table.Column{
 		{Title: "ID", Width: 10},
