@@ -7,3 +7,4 @@ dist/
 *.*-wal
 .vscode
 *.sh
+plex-audit
