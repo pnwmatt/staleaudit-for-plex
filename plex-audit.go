@@ -2,12 +2,17 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math"
 	"os"
+	"os/user"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -74,13 +79,14 @@ const (
 	LibraryView
 )
 
-type Config struct {
-	FilterCreatedBeforeMonths int
-	FilterLastStreamedMonths  int
+type LocalConfig struct {
+	FilterCreatedBeforeMonths int    `json:"filter_created_before_months" default:"18"`
+	FilterLastStreamedMonths  int    `json:"filter_last_streamed_months" default:"18"`
+	PlexDBPath                string `json:"plex_db_path" default:""`
+	Language                  string `json:"language" default:"en"`
 }
 
-type model struct {
-	config   Config
+type Model struct {
 	page     Page
 	selected int // which to-do items are selected
 	err      error
@@ -92,13 +98,29 @@ type model struct {
 	maxLibraryNameLength float64
 }
 
-func main() {
+var CONFIG LocalConfig
 
-	m := model{table: table.Model{}, selected: 0, err: nil}
-	m.config = Config{
-		FilterCreatedBeforeMonths: 18,
-		FilterLastStreamedMonths:  18,
+func main() {
+	// if there is a command line argument for --config=, pass that into loadConfig:
+	CONFIG = LocalConfig{}
+	if len(os.Args) > 1 {
+		for _, arg := range os.Args[1:] {
+			if strings.HasPrefix(arg, "--config=") {
+				configPath := strings.TrimPrefix(arg, "--config=")
+				// load the config from the file
+				loadConfig(configPath)
+			} else {
+				fmt.Println("Error: Unrecognized argument: ", arg)
+				fmt.Println("Usage: plex-audit --config=<path to config file>")
+				os.Exit(1)
+			}
+		}
+	} else {
+		// load the config from the default location
+		loadConfig("")
 	}
+
+	MODEL := Model{table: table.Model{}, selected: 0, err: nil}
 
 	// this query seems to work, but returns less rows than expected
 	// seems to stop in 2022
@@ -111,24 +133,98 @@ func main() {
 
 	// Connect to the Plex sqlite server
 
-	db, err := sql.Open("sqlite3", "plex.sqlite")
+	db, err := sql.Open("sqlite3", CONFIG.PlexDBPath)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer db.Close()
 
-	m.db = db
-	m.printer = message.NewPrinter(message.MatchLanguage("en"))
+	MODEL.db = db
+	MODEL.printer = message.NewPrinter(message.MatchLanguage(CONFIG.Language))
 
-	m.prepareLibraryPickerPage()
-	if _, err := tea.NewProgram(m).Run(); err != nil {
+	MODEL.prepareLibraryPickerPage()
+	if _, err := tea.NewProgram(MODEL).Run(); err != nil {
 		fmt.Println("Error running program:", err)
 		os.Exit(1)
 	}
 
 }
 
-func (m *model) prepareLibraryPickerPage() {
+func loadConfig(configLocationInput string) {
+	var configLocation string
+	var plexRoot string
+	slash := string(os.PathSeparator)
+	var configFh *os.File
+	opsys := runtime.GOOS
+	fmt.Println("OS: " + opsys)
+	if strings.HasPrefix("windows/", opsys) {
+		plexRoot = "%LOCALAPPDATA%\\Plex Media Server"
+	} else if strings.HasPrefix("darwin/", opsys) {
+		usr, _ := user.Current()
+		plexRoot = usr.HomeDir + "/Library/Application Support/Plex Media Server"
+	} else if strings.HasPrefix("linux/", opsys) {
+		plexRoot = "$PLEX_HOME/Library/Application Support/Plex Media Server"
+	} else {
+		fmt.Println("Error: Unrecognized OS prefix: ", opsys)
+		os.Exit(1)
+	}
+
+	if configLocationInput == "" {
+		configLocation = os.ExpandEnv(plexRoot + slash + "plex-audit.json")
+	} else {
+		configLocation = os.ExpandEnv(configLocationInput)
+		if !strings.Contains(configLocationInput, slash) {
+			configLocation = "." + slash + configLocationInput
+		}
+	}
+	configDir := strings.TrimSuffix(configLocation, slash+filepath.Base(configLocation))
+	if _, err := os.Stat(configDir); os.IsNotExist(err) {
+		fmt.Println("Error: Directory does not exist:", configDir)
+		os.Exit(1)
+	}
+
+	if _, err := os.Stat(configLocation); os.IsNotExist(err) {
+		fmt.Println("Creating a new config...")
+		configFh, err = os.Create(configLocation)
+		if err != nil {
+			panic(err)
+		}
+		defer configFh.Close()
+	} else {
+		fmt.Println("Using an existing config...")
+		// Load the existing file.
+		configFh, err = os.Open(configLocation)
+		if err != nil {
+			panic(err)
+		}
+		defer configFh.Close()
+
+		decoder := json.NewDecoder(configFh)
+		decoder.Decode(&CONFIG)
+	}
+
+	if CONFIG.PlexDBPath == "" {
+		CONFIG.PlexDBPath = os.ExpandEnv(plexRoot + slash + "Plug-in Support" + slash + "com.plexapp.plugins.library.db")
+	}
+	if CONFIG.Language == "" {
+		CONFIG.Language = "en"
+	}
+	if CONFIG.FilterCreatedBeforeMonths == 0 {
+		CONFIG.FilterCreatedBeforeMonths = 18
+	}
+	if CONFIG.FilterLastStreamedMonths == 0 {
+		CONFIG.FilterLastStreamedMonths = 18
+	}
+
+	encoder := json.NewEncoder(configFh)
+	encoder.Encode(&CONFIG)
+
+	fmt.Println("Using config at " + configLocation)
+	fmt.Println("Using Plex DB at " + CONFIG.PlexDBPath)
+	fmt.Println("Using language " + CONFIG.Language)
+}
+
+func (m *Model) prepareLibraryPickerPage() {
 	tableRows := []table.Row{}
 
 	rows, err := m.db.Query("SELECT library_section_id, name, sum(size) as s FROM media_items INNER JOIN library_sections ls ON ls.id = library_section_id WHERE deleted_at IS NULL AND library_section_id > 0 GROUP BY library_section_id ORDER BY s DESC")
@@ -183,7 +279,7 @@ func (m *model) prepareLibraryPickerPage() {
 
 }
 
-func (m *model) prepareLibraryViewPage() {
+func (m *Model) prepareLibraryViewPage() {
 
 	//  select size from media_items inner join metadata_items mi on media_items.metadata_item_id = mi.id where size > 0;
 	// media_items has size, and binds to metadata_item_id.
@@ -303,8 +399,8 @@ func (m *model) prepareLibraryViewPage() {
 
 	// make a unix epoch timestamp for 18 months prior:
 	// 18 months = 18 * 30 * 24 * 60 * 60 = 15552000
-	createdLongAgo := float64(time.Now().AddDate(0, -1*m.config.FilterCreatedBeforeMonths, 0).Unix())
-	lastStreamedLongAgo := float64(time.Now().AddDate(0, -1*m.config.FilterLastStreamedMonths, 0).Unix())
+	createdLongAgo := float64(time.Now().AddDate(0, -1*CONFIG.FilterCreatedBeforeMonths, 0).Unix())
+	lastStreamedLongAgo := float64(time.Now().AddDate(0, -1*CONFIG.FilterLastStreamedMonths, 0).Unix())
 	for _, item := range libraryItems {
 		if item.CreatedAt > createdLongAgo {
 			continue
@@ -379,11 +475,11 @@ func (m *model) prepareLibraryViewPage() {
 // host, session, token, and Client-Identifier redacted
 // curl 'https://x.plex.direct:32400/playlists/88/items?Item%5Btype%5D=42&Item%5Btitle%5D=Jojo%20Rabbit&Item%5Btarget%5D=Custom%3A%20Universal%20TV&Item%5BtargetTagID%5D=&Item%5BlocationID%5D=-1&Item%5BLocation%5D%5Buri%5D=library%3A%2F%2Fd7a0632c-2227-401b-bea8-f19adeb9c1f9%2Fitem%2F%252Flibrary%252Fmetadata%252F8121&Item%5BDevice%5D%5Bprofile%5D=Universal%20TV&Item%5BPolicy%5D%5Bscope%5D=all&Item%5BPolicy%5D%5Bvalue%5D=&Item%5BPolicy%5D%5Bunwatched%5D=0&Item%5BMediaSettings%5D%5BvideoQuality%5D=60&Item%5BMediaSettings%5D%5BvideoResolution%5D=1920x1080&Item%5BMediaSettings%5D%5BmaxVideoBitrate%5D=8000&Item%5BMediaSettings%5D%5BaudioBoost%5D=&Item%5BMediaSettings%5D%5BsubtitleSize%5D=&Item%5BMediaSettings%5D%5BmusicBitrate%5D=&Item%5BMediaSettings%5D%5BphotoQuality%5D=&Item%5BMediaSettings%5D%5BphotoResolution%5D=&X-Plex-Product=Plex%20Web&X-Plex-Version=4.145.1&X-Plex-Client-Identifier=x&X-Plex-Platform=Firefox&X-Plex-Platform-Version=137.0&X-Plex-Features=external-media%2Cindirect-media%2Chub-style-list&X-Plex-Model=standalone&X-Plex-Device=OSX&X-Plex-Device-Name=Firefox&X-Plex-Device-Screen-Resolution=1388x763%2C1440x900&X-Plex-Token=&X-Plex-Language=en&X-Plex-Session-Id=' --compressed -X PUT -H 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:137.0) Gecko/20100101 Firefox/137.0' -H 'Accept: text/plain, */*; q=0.01' -H 'Accept-Language: en' -H 'Accept-Encoding: gzip, deflate, br, zstd' -H 'Origin: https://app.plex.tv' -H 'Sec-GPC: 1' -H 'Connection: keep-alive' -H 'Referer: https://app.plex.tv/' -H 'Sec-Fetch-Dest: empty' -H 'Sec-Fetch-Mode: cors' -H 'Sec-Fetch-Site: cross-site' -H 'DNT: 1' -H 'Priority: u=0' -H 'Pragma: no-cache' -H 'Cache-Control: no-cache' -H 'Content-Length: 0'
 
-func (m model) Init() tea.Cmd {
+func (m Model) Init() tea.Cmd {
 	return nil
 }
 
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -409,7 +505,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m model) View() string {
+func (m Model) View() string {
 	//fmt.Println("M.page is ", m.page)
 	switch m.page {
 	case LibraryPicker:
@@ -418,7 +514,7 @@ func (m model) View() string {
 		return lipgloss.JoinHorizontal(
 			lipgloss.Top,
 			lipgloss.JoinVertical(lipgloss.Top,
-				"Displaying items added more than "+strconv.Itoa(m.config.FilterCreatedBeforeMonths)+" months ago, and not streamed in the last "+strconv.Itoa(m.config.FilterLastStreamedMonths)+" months.\n",
+				"Displaying items added more than "+strconv.Itoa(CONFIG.FilterCreatedBeforeMonths)+" months ago, and not streamed in the last "+strconv.Itoa(CONFIG.FilterLastStreamedMonths)+" months.\n",
 				baseStyle.Render(m.table.View())),
 		) + "\n"
 	}
