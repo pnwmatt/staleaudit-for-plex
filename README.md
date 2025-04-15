@@ -29,6 +29,10 @@ Not tested on Linux or BSD
 go install github.com/pnwmatt/staleaudit-for-plex@latest
 ```
 
+### ... download a release
+
+Visit https://github.com/pnwmatt/staleaudit-for-plex/releases
+
 ## Usage
 
 On the server running Plex, simply run the command:
