@@ -20,6 +20,13 @@ builds:
       - linux
       - windows
       - darwin
+    goarch:
+      - amd64
+      - 386
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
     overrides:
       - goos: windows
         goarch: amd64
@@ -29,10 +36,6 @@ builds:
         goarch: 386
         env:
           - CC=i686-w64-mingw32-gcc
-      - goos: windows
-        goarch: arm64
-        env:
-          - CC=aarch64-w64-mingw32-gcc
 
 archives:
   - formats: [tar.gz]
