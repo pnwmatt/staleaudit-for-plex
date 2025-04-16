@@ -211,7 +211,7 @@ func loadConfig(configLocationInput string) {
 	}
 
 	if CONFIG.PlexDBPath == "" {
-		CONFIG.PlexDBPath = os.ExpandEnv(plexRoot + slash + "Plug-in Support" + slash + "com.plexapp.plugins.library.db")
+		CONFIG.PlexDBPath = os.ExpandEnv(plexRoot + slash + "Plug-in Support" + slash + "Databases" + slash + "com.plexapp.plugins.library.db")
 	}
 	if CONFIG.Language == "" {
 		CONFIG.Language = "en"
@@ -238,6 +238,7 @@ func (m *Model) prepareLibraryPickerPage() {
 
 	rows, err := m.db.Query("SELECT library_section_id, name, sum(size) as s FROM media_items INNER JOIN library_sections ls ON ls.id = library_section_id WHERE deleted_at IS NULL AND library_section_id > 0 GROUP BY library_section_id ORDER BY s DESC")
 	if err != nil {
+		log.Fatalln("DB location: " + CONFIG.PlexDBPath)
 		log.Fatal("Media Items query:" + err.Error())
 	}
 	defer rows.Close()

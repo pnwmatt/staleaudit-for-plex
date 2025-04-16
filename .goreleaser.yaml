@@ -15,11 +15,15 @@ before:
 
 builds:
   - env:
-      - CGO_ENABLED=0
+      - CGO_ENABLED=1
     goos:
       - linux
       - windows
       - darwin
+    overrides:
+      - goos: windows
+        env:
+          - CC=x86_64-w64-mingw32-gcc
 
 archives:
   - formats: [tar.gz]

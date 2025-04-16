@@ -8,3 +8,4 @@ dist/
 .vscode
 *.sh
 staleaudit-for-plex
+staleaudit-for-plex.exe
