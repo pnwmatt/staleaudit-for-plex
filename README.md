@@ -69,3 +69,9 @@ By default when first ran, it will create a `staleaudit-for-plex.json` file with
 | filter_last_streamed_months  | Only show media that hasn't been streamed in this many months | 18                                                                     |
 | plex_db_path                 | Path to the Plex Media Server's sqlite database               | `(plex root)/Plug-in Support/Databases/com.plexapp.plugins.library.db` |
 | language                     | Localization formatting for large numbers                     | `en`                                                                   |
+
+## Roadmap
+- [ ] View TV shows by season (90% done)
+- [ ] Command to use *arr API and Plex API to remove content
+- [ ] Add tags to content that prevent staleaudit from reporting that item
+- [ ] Command to lower the bitrate for content to decrease filesize
