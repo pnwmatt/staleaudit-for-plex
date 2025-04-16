@@ -162,7 +162,7 @@ func loadConfig(configLocationInput string) {
 		fmt.Println("OS: " + opsys)
 	}
 	if strings.HasPrefix("windows/", opsys) {
-		dir, _ := os.UserConfigDir()
+		dir, _ := os.UserCacheDir()
 		plexRoot = dir + slash + "Plex Media Server"
 	} else if strings.HasPrefix("darwin/", opsys) {
 		usr, _ := user.Current()
